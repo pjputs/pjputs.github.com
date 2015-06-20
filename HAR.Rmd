@@ -1,0 +1,86 @@
+---
+title: "Coursera - Practical Machine Learning"
+author: "Pierre Puts"
+date: "Saturday, June 20, 2015"
+output: html_document
+---
+
+  
+This assignment is to predict the manner in which a particular exercise was done ("classe") by the participants ("user") in the exercise, from measurements taken from monitoring devices on the body such as accelerometers. The manner is classified in one of classes A-E. A training and test dataset is provided, so we will load those first (as data frames) - the assumption is that you will have the files available in your working directory.
+
+```{r}
+# download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",destfile="pml-training.csv")
+# download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",destfile="pml-testing.csv")
+training<-read.csv("pml-training.csv")
+testing<-read.csv("pml-testing.csv")
+library(caret,quietly=TRUE)
+library(adabag,quietly=TRUE)
+```
+
+In the training dataset, the "classe" column contains the variable to be predicted, so here is its distribution and histogram :
+```{r}
+summary(training$classe)
+plot(training$classe,main="Frequency of classe")
+```
+  
+Next we take a look at how classe depends on two other noteworthy variables :  
+First classe by row number, which shows that the training dataset is actually sorted by classe (as first sorting key)
+
+```{r}
+plot(training$X,training$classe,xlab="row number",ylab="classe",main="classe by row number")
+```
+
+Second classe by user, which gives a nice view of the distribution of classe :
+
+```{r}
+plot(training$user_name,training$classe,xlab="user",ylab="classe",main="classe by user")
+```
+
+Then here is an overview of the columns in the datasets :  
+1 column X is the record number; as can be seen from the figure above, the training dataset is sorted by classe (as first component of the sort key) so that gives a strong prediction feature but one that we will discount here as it is not the purpose of the assignment, and also not applicable to the testing dataset  
+2 column user_name would be a natural candidate to separate out which we will not do, as we are looking to do cross-user prediction  
+3-7 these columns are related to timing  
+8-159 these columns contain the actual sensor measurements - they are likely to be "noisy" and some can be seen to contain lots of NA's (missing data)  
+160 this column is our "classe" in training but "problem_id" in testing  
+There is a number of columns with NA's or otherwise empty cells in either or both of the datasets and we will eliminate those.
+Because of some technical reason (in predict.boosting) we must first merge the training and testing datasets and then split them out again.
+```{r}
+coltrn<-as.vector(colSums(is.na(training))<1000) # keep columns with <1,000 NA's
+coltst<-as.vector(colSums(is.na(testing))<5) # keep columns with <5 NA's
+tst2<-testing
+tst2[,161]<-as.factor(rep(c("A","B","C","D","E"),4))
+colnames(tst2)[161]<-"classe"
+tst3<-tst2[,-160]
+join<-rbind(training,tst3)
+trn<-join[1:19622,coltrn&coltst] # keep only columns good in both training and testing (includes classe)
+tst<-join[19623:19642,coltrn&coltst] # this has preserved the original order of rows from testing
+```
+
+Even after removing many features we still have a significant number of both observations and features.  
+In view of the constraints of my computer (old 2009 laptop), we will be limited in what we can do - for that reason some nice methods such as rf (for RandomForest) or svmRadial will not be attempted here (have tried though but with no success).  
+Instead, we will use boosting after having created Folds (20 Folds), and we will cross-validate across the folds.
+The boosting function will fit a model on the first fold - this may take a few minutes depending on your cpu.
+Then we will create a vector for cross-validation, from applying the fit on each of the folds. The error percentages per fold as well as their mean, will tell us what error to expect.  
+Finally, we will calculate the overall error as well as the confusion matrix for the entire training dataset.
+```{r}
+set.seed(354826) # some random number
+flds<-createFolds(trn$classe,k=20) # create 20 folds (subsets) of training
+trn01<-trn[flds$Fold01,] # select one fold for training (otherwise it takes too long ...)
+set.seed(1548589) # some random number
+F01<-boosting(classe~.-X,data=trn01) # this may take a few minutes; take care to exclude X (= row number)
+err<-rep(0,20)
+for (i in 1:20) {ind<-flds[[i]];trni<-trn[ind,];erri<-predict.boosting(F01,newdata=trni);err[i]<-erri$error}
+unlist(err)
+mean(unlist(err))
+Prall<-predict.boosting(F01,newdata=trn)
+Prall$error
+Prall$confusion
+```
+The resulting expected error is deemed to be acceptable (given the limits of my computer).
+
+Finally, we will apply the fitted model to the testing dataset.
+```{r}
+Prtst<-predict.boosting(F01,newdata=tst)
+answers<-Prtst$class
+answers
+```
